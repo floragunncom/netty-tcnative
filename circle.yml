@@ -1,7 +1,13 @@
 machine:
   java:
     version: oraclejdk8
-    
+
+test:
+  override:
+    - mvn install
+  post:
+    - cp -R netty-tcnative/* $CIRCLE_ARTIFACTS
+
 general:
   branches:
     only:
