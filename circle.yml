@@ -6,9 +6,7 @@ test:
   override:
     - mvn install
   post:
-    - "ls -la"
-    - pwd
-    - cp -R /home/ubuntu/netty-tcnative/openssl-static/target/* $CIRCLE_ARTIFACTS
+    - cp -R /home/ubuntu/netty-tcnative/openssl-static/target/netty-tcnative-openssl-static-*-linux-x86_64.jar $CIRCLE_ARTIFACTS
 
 general:
   branches:
