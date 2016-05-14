@@ -1,0 +1,8 @@
+machine:
+  java:
+    version: oraclejdk8
+    
+general:
+  branches:
+    only:
+      - 1.1.33_ossl_static
