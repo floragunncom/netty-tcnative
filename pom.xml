@@ -425,9 +425,9 @@
         </property>
       </activation>
       <modules>
-        <module>openssl-dynamic</module>
+        <!--<module>openssl-dynamic</module>-->
         <module>openssl-static</module>
-        <module>boringssl-static</module>
+        <!--<module>boringssl-static</module>-->
 
         <!-- Re-enable this once we get LibreSSL buiding on windows -->
         <!-- <module>libressl-static</module> -->
