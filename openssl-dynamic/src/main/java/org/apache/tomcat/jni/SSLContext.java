@@ -312,7 +312,21 @@ public final class SSLContext {
     public static native long sessionTimeouts(long ctx);
 
     /**
-     * Set TLS session keys.
+     * TLS session ticket key resumption statistics.
+     */
+    public static native long sessionTicketKeyNew(long ctx);
+    public static native long sessionTicketKeyResume(long ctx);
+    public static native long sessionTicketKeyRenew(long ctx);
+    public static native long sessionTicketKeyFail(long ctx);
+
+    /**
+     * Set TLS session ticket keys.
+     *
+     * <p> The first key in the list is the primary key. Tickets dervied from the other keys
+     * in the list will be accepted but updated to a new ticket using the primary key. This
+     * is useful for implementing ticket key rotation.
+     *
+     * @see <a href="https://tools.ietf.org/html/rfc5077">RFC 5077</a>
      */
     public static void setSessionTicketKeys(long ctx, SessionTicketKey[] keys) {
         if (keys == null || keys.length == 0) {
@@ -332,7 +346,9 @@ public final class SSLContext {
     }
 
     /**
-     * Set TLS session keys. This allows us to share keys across TFEs.
+     * Set TLS session keys.
+     *
+     * @deprecated  prefer {@link #setSessionTicketKeys(long, SessionTicketKey[])}
      */
     @Deprecated
     public static void setSessionTicketKeys(long ctx, byte[] keys) {
@@ -342,7 +358,7 @@ public final class SSLContext {
         setSessionTicketKeys0(ctx, keys);
     }
     /**
-     * Set TLS session keys. This allows us to share keys across TFEs.
+     * Set TLS session keys.
      */
     private static native void setSessionTicketKeys0(long ctx, byte[] keys);
 
@@ -437,6 +453,15 @@ public final class SSLContext {
     public static native void setCertVerifyCallback(long ctx, CertificateVerifier verifier);
 
     /**
+     * Allow to hook {@link CertificateRequestedCallback} into the certificate choosing process.
+     * This will call {@code SSL_CTX_set_client_cert_cb} and so replace the default verification
+     * callback used by openssl
+     * @param ctx Server or Client context to use.
+     * @param callback the callback to call during certificate selection.
+     */
+    public static native void setCertRequestedCallback(long ctx, CertificateRequestedCallback callback);
+
+    /**
      * Set next protocol for next protocol negotiation extension
      * @param ctx Server context to use.
      * @param nextProtos comma delimited list of protocols in priority order
@@ -474,7 +499,15 @@ public final class SSLContext {
      */
     public static native void setTmpDH(long ctx, String cert)
             throws Exception;
-    
+
+    /**
+     * Set length of the DH to use.
+     *
+     * @param ctx Server context to use.
+     * @param length the length.
+     */
+    public static native void setTmpDHLength(long ctx, int length);
+
     /**
      * Set ECDH elliptic curve by name
      * @param ctx Server context to use.
@@ -511,5 +544,4 @@ public final class SSLContext {
      * @return the mode.
      */
     public static native int getMode(long ctx);
-
 }

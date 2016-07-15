@@ -40,6 +40,7 @@
 #endif
 
 #include "apr_thread_rwlock.h"
+#include "apr_atomic.h"
 
 /* OpenSSL headers */
 #include <openssl/opensslv.h>
@@ -52,6 +53,9 @@
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 #include <openssl/x509v3.h>
+
+#define ERR_LEN 256
+
 /* Avoid tripping over an engine build installed globally and detected
  * when the user points at an explicit non-engine flavor of OpenSSL
  */
@@ -216,6 +220,8 @@
 
 #define MAX_ALPN_NPN_PROTO_SIZE 65535
 
+static const char* UNKNOWN_AUTH_METHOD = "UNKNOWN";
+
 /* ECC: make sure we have at least 1.0.0 */
 #if !defined(OPENSSL_NO_EC) && defined(TLSEXT_ECPOINTFORMAT_uncompressed)
 #define HAVE_ECC              1
@@ -290,6 +296,9 @@ struct tcn_ssl_ctxt_t {
     jobject verifier;
     jmethodID verifier_method;
 
+    jobject cert_requested_callback;
+    jmethodID cert_requested_callback_method;
+
     unsigned char           *next_proto_data;
     unsigned int            next_proto_len;
     int                     next_selector_failure_behavior;
@@ -302,9 +311,20 @@ struct tcn_ssl_ctxt_t {
     apr_thread_rwlock_t     *mutex;
     tcn_ssl_ticket_key_t    *ticket_keys;
     unsigned int            ticket_keys_len;
+
+    /* TLS ticket key session resumption statistics */
+
+    // The client did not present a ticket and we issued a new one.
+    apr_uint32_t            ticket_keys_new;
+    // The client presented a ticket derived from the primary key
+    apr_uint32_t            ticket_keys_resume;
+    // The client presented a ticket derived from an older key, and we upgraded to the primary key.
+    apr_uint32_t            ticket_keys_renew;
+    // The client presented a ticket that did not match any key in the list.
+    apr_uint32_t            ticket_keys_fail;
 };
 
-  
+
 typedef struct {
     apr_pool_t     *pool;
     tcn_ssl_ctxt_t *ctx;
@@ -350,15 +370,26 @@ DH         *SSL_dh_get_tmp_param(int);
 DH         *SSL_dh_get_param_from_file(const char *);
 RSA        *SSL_callback_tmp_RSA(SSL *, int, int);
 DH         *SSL_callback_tmp_DH(SSL *, int, int);
+// The following provided callbacks will always return DH of a given length.
+// See https://www.openssl.org/docs/manmaster/ssl/SSL_CTX_set_tmp_dh_callback.html
+DH         *SSL_callback_tmp_DH_512(SSL *, int, int);
+DH         *SSL_callback_tmp_DH_1024(SSL *, int, int);
+DH         *SSL_callback_tmp_DH_2048(SSL *, int, int);
+DH         *SSL_callback_tmp_DH_4096(SSL *, int, int);
 void        SSL_callback_handshake(const SSL *, int, int);
 int         SSL_CTX_use_certificate_chain(SSL_CTX *, const char *, int);
 int         SSL_CTX_use_certificate_chain_bio(SSL_CTX *, BIO *, int);
+int         SSL_use_certificate_chain_bio(SSL *, BIO *, int);
+X509        *load_pem_cert_bio(tcn_pass_cb_t *, const BIO *);
+EVP_PKEY    *load_pem_key_bio(tcn_pass_cb_t *, const BIO *);
+
 int         SSL_callback_SSL_verify(int, X509_STORE_CTX *);
 int         SSL_rand_seed(const char *file);
 int         SSL_callback_next_protos(SSL *, const unsigned char **, unsigned int *, void *);
 int         SSL_callback_select_next_proto(SSL *, unsigned char **, unsigned char *, const unsigned char *, unsigned int,void *);
 int         SSL_callback_alpn_select_proto(SSL *, const unsigned char **, unsigned char *, const unsigned char *, unsigned int, void *);
-
+void        SSL_init_app_data2_3_idx(void);
+const char *SSL_cipher_authentication_method(const SSL_CIPHER *);
 
 #if defined(__GNUC__) || defined(__GNUG__)
     // only supported with GCC, this will be used to support different openssl versions at the same time.

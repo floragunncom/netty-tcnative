@@ -26,11 +26,11 @@
 #include "apr_thread_mutex.h"
 #include "apr_thread_rwlock.h"
 #include "apr_poll.h"
+#include "apr_atomic.h"
 
 #ifdef HAVE_OPENSSL
 #include "ssl_private.h"
-
-static const char* UNKNOWN_AUTH_METHOD = "UNKNOWN";
+#include <stdint.h>
 
 static jclass byteArrayClass;
 
@@ -41,45 +41,52 @@ static apr_status_t ssl_context_cleanup(void *data)
 
     if (c) {
         int i;
-        if (c->crl)
+        if (c->crl != NULL)
             X509_STORE_free(c->crl);
         c->crl = NULL;
-        if (c->ctx)
+        if (c->ctx != NULL)
             SSL_CTX_free(c->ctx);
         c->ctx = NULL;
         for (i = 0; i < SSL_AIDX_MAX; i++) {
-            if (c->certs[i]) {
+            if (c->certs[i] != NULL) {
                 X509_free(c->certs[i]);
                 c->certs[i] = NULL;
             }
-            if (c->keys[i]) {
+            if (c->keys[i] != NULL) {
                 EVP_PKEY_free(c->keys[i]);
                 c->keys[i] = NULL;
             }
         }
-        if (c->bio_is) {
+        if (c->bio_is != NULL ) {
             SSL_BIO_close(c->bio_is);
             c->bio_is = NULL;
         }
-        if (c->bio_os) {
+        if (c->bio_os != NULL ) {
             SSL_BIO_close(c->bio_os);
             c->bio_os = NULL;
         }
 
-        if (c->verifier) {
+        if (c->verifier != NULL) {
             tcn_get_java_env(&e);
             (*e)->DeleteGlobalRef(e, c->verifier);
             c->verifier = NULL;
         }
         c->verifier_method = NULL;
 
-        if (c->next_proto_data) {
+        if (c->cert_requested_callback != NULL) {
+            tcn_get_java_env(&e);
+            (*e)->DeleteGlobalRef(e, c->cert_requested_callback);
+            c->cert_requested_callback = NULL;
+        }
+        c->cert_requested_callback_method = NULL;
+
+        if (c->next_proto_data != NULL) {
             free(c->next_proto_data);
             c->next_proto_data = NULL;
         }
         c->next_proto_len = 0;
 
-        if (c->alpn_proto_data) {
+        if (c->alpn_proto_data != NULL) {
             free(c->alpn_proto_data);
             c->alpn_proto_data = NULL;
         }
@@ -87,7 +94,7 @@ static apr_status_t ssl_context_cleanup(void *data)
 
         apr_thread_rwlock_destroy(c->mutex);
 
-        if (c->ticket_keys) {
+        if (c->ticket_keys != NULL) {
             free(c->ticket_keys);
             c->ticket_keys = NULL;
         }
@@ -653,6 +660,30 @@ TCN_IMPLEMENT_CALL(void, SSLContext, setTmpDH)(TCN_STDARGS, jlong ctx,
     TCN_FREE_CSTRING(file);
 }
 
+TCN_IMPLEMENT_CALL(void, SSLContext, setTmpDHLength)(TCN_STDARGS, jlong ctx, jint length)
+{
+    tcn_ssl_ctxt_t *c = J2P(ctx, tcn_ssl_ctxt_t *);
+    UNREFERENCED(o);
+    TCN_ASSERT(ctx != 0);
+    switch (length) {
+        case 512:
+            SSL_CTX_set_tmp_dh_callback(c->ctx,  SSL_callback_tmp_DH_512);
+            return;
+        case 1024:
+            SSL_CTX_set_tmp_dh_callback(c->ctx,  SSL_callback_tmp_DH_1024);
+            return;
+        case 2048:
+            SSL_CTX_set_tmp_dh_callback(c->ctx,  SSL_callback_tmp_DH_2048);
+            return;
+        case 4096:
+            SSL_CTX_set_tmp_dh_callback(c->ctx,  SSL_callback_tmp_DH_4096);
+            return;
+        default:
+            tcn_Throw(e, "Unsupported length %s", length);
+            return;
+    }
+}
+
 TCN_IMPLEMENT_CALL(void, SSLContext, setTmpECDHByCurveName)(TCN_STDARGS, jlong ctx,
                                                                   jstring curveName)
 {
@@ -771,26 +802,6 @@ static EVP_PKEY *load_pem_key(tcn_ssl_ctxt_t *c, const char *file)
     return key;
 }
 
-static EVP_PKEY *load_pem_key_bio(tcn_ssl_ctxt_t *c, const BIO *bio)
-{
-    EVP_PKEY *key = NULL;
-    tcn_pass_cb_t *cb_data = c->cb_data;
-    int i;
-
-    if (cb_data == NULL)
-        cb_data = &tcn_password_callback;
-    for (i = 0; i < 3; i++) {
-        key = PEM_read_bio_PrivateKey((BIO*) bio, NULL,
-                    (pem_password_cb *)SSL_password_callback,
-                    (void *)cb_data);
-        if (key)
-            break;
-        cb_data->password[0] = '\0';
-        BIO_ctrl((BIO*) bio, BIO_CTRL_RESET, 0, NULL);
-    }
-    return key;
-}
-
 static X509 *load_pem_cert(tcn_ssl_ctxt_t *c, const char *file)
 {
     BIO *bio = NULL;
@@ -816,25 +827,6 @@ static X509 *load_pem_cert(tcn_ssl_ctxt_t *c, const char *file)
         cert = d2i_X509_bio(bio, NULL);
     }
     BIO_free(bio);
-    return cert;
-}
-
-static X509 *load_pem_cert_bio(tcn_ssl_ctxt_t *c, const BIO *bio)
-{
-    X509 *cert = NULL;
-    tcn_pass_cb_t *cb_data = c->cb_data;
-
-    if (cb_data == NULL)
-        cb_data = &tcn_password_callback;
-    cert = PEM_read_bio_X509_AUX((BIO*) bio, NULL,
-                (pem_password_cb *)SSL_password_callback,
-                (void *)cb_data);
-    if (cert == NULL &&
-       (ERR_GET_REASON(ERR_peek_last_error()) == PEM_R_NO_START_LINE)) {
-        ERR_clear_error();
-        BIO_ctrl((BIO*) bio, BIO_CTRL_RESET, 0, NULL);
-        cert = d2i_X509_bio((BIO*) bio, NULL);
-    }
     return cert;
 }
 
@@ -1019,14 +1011,14 @@ TCN_IMPLEMENT_CALL(jboolean, SSLContext, setCertificateBio)(TCN_STDARGS, jlong c
         goto cleanup;
     }
 
-    if ((c->keys[idx] = load_pem_key_bio(c, key_bio)) == NULL) {
+    if ((c->keys[idx] = load_pem_key_bio(c->cb_data, key_bio)) == NULL) {
         ERR_error_string(ERR_get_error(), err);
         ERR_clear_error();
         tcn_Throw(e, "Unable to load certificate key (%s)",err);
         rv = JNI_FALSE;
         goto cleanup;
     }
-    if ((c->certs[idx] = load_pem_cert_bio(c, cert_bio)) == NULL) {
+    if ((c->certs[idx] = load_pem_cert_bio(c->cb_data, cert_bio)) == NULL) {
         ERR_error_string(ERR_get_error(), err);
         ERR_clear_error();
         tcn_Throw(e, "Unable to load certificate (%s) ", err);
@@ -1330,6 +1322,34 @@ TCN_IMPLEMENT_CALL(jlong, SSLContext, sessionCacheFull)(TCN_STDARGS, jlong ctx)
     return rv;
 }
 
+TCN_IMPLEMENT_CALL(jlong, SSLContext, sessionTicketKeyNew)(TCN_STDARGS, jlong ctx)
+{
+    tcn_ssl_ctxt_t *c = J2P(ctx, tcn_ssl_ctxt_t *);
+    jlong rv = apr_atomic_read32(&c->ticket_keys_new);
+    return rv;
+}
+
+TCN_IMPLEMENT_CALL(jlong, SSLContext, sessionTicketKeyResume)(TCN_STDARGS, jlong ctx)
+{
+    tcn_ssl_ctxt_t *c = J2P(ctx, tcn_ssl_ctxt_t *);
+    jlong rv = apr_atomic_read32(&c->ticket_keys_resume);
+    return rv;
+}
+
+TCN_IMPLEMENT_CALL(jlong, SSLContext, sessionTicketKeyRenew)(TCN_STDARGS, jlong ctx)
+{
+    tcn_ssl_ctxt_t *c = J2P(ctx, tcn_ssl_ctxt_t *);
+    jlong rv = apr_atomic_read32(&c->ticket_keys_renew);
+    return rv;
+}
+
+TCN_IMPLEMENT_CALL(jlong, SSLContext, sessionTicketKeyFail)(TCN_STDARGS, jlong ctx)
+{
+    tcn_ssl_ctxt_t *c = J2P(ctx, tcn_ssl_ctxt_t *);
+    jlong rv = apr_atomic_read32(&c->ticket_keys_fail);
+    return rv;
+}
+
 static int current_session_key(tcn_ssl_ctxt_t *c, tcn_ssl_ticket_key_t *key) {
     int result = JNI_FALSE;
     apr_thread_rwlock_rdlock(c->mutex);
@@ -1360,36 +1380,43 @@ static int find_session_key(tcn_ssl_ctxt_t *c, unsigned char key_name[16], tcn_s
 }
 
 static int ssl_tlsext_ticket_key_cb(SSL *s, unsigned char key_name[16], unsigned char *iv, EVP_CIPHER_CTX *ctx, HMAC_CTX *hctx, int enc) {
-    tcn_ssl_ctxt_t *c = SSL_get_app_data2(s);
-    tcn_ssl_ticket_key_t key;
-    int is_current_key;
+     tcn_ssl_ctxt_t *c = SSL_get_app_data2(s);
+     tcn_ssl_ticket_key_t key;
+     int is_current_key;
 
-    if (enc) { /* create new session */
-        if (current_session_key(c, &key)) {
-            if (RAND_bytes(iv, EVP_MAX_IV_LENGTH) <= 0) {
-                return -1; /* insufficient random */
-            }
+     if (enc) { /* create new session */
+         if (current_session_key(c, &key)) {
+             if (RAND_bytes(iv, EVP_MAX_IV_LENGTH) <= 0) {
+                 return -1; /* insufficient random */
+             }
 
-            memcpy(key_name, key.key_name, 16);
+             memcpy(key_name, key.key_name, 16);
 
-            EVP_EncryptInit_ex(ctx, EVP_aes_128_cbc(), NULL, key.aes_key, iv);
-            HMAC_Init_ex(hctx, key.hmac_key, 16, EVP_sha256(), NULL);
-            return 1;
-        }
-        // No ticket configured
-        return 0;
-    } else { /* retrieve session */
-        if (find_session_key(c, key_name, &key, &is_current_key)) {
-            HMAC_Init_ex(hctx, key.hmac_key, 16, EVP_sha256(), NULL);
-            EVP_DecryptInit_ex(ctx, EVP_aes_128_cbc(), NULL, key.aes_key, iv );
-            if (!is_current_key) {
-                return 2;
-            }
-            return 1;
-        }
-        // No ticket
-        return 0;
-    }
+             EVP_EncryptInit_ex(ctx, EVP_aes_128_cbc(), NULL, key.aes_key, iv);
+             HMAC_Init_ex(hctx, key.hmac_key, 16, EVP_sha256(), NULL);
+             apr_atomic_inc32(&c->ticket_keys_new);
+             return 1;
+         }
+         // No ticket configured
+         return 0;
+     } else { /* retrieve session */
+         if (find_session_key(c, key_name, &key, &is_current_key)) {
+             HMAC_Init_ex(hctx, key.hmac_key, 16, EVP_sha256(), NULL);
+             EVP_DecryptInit_ex(ctx, EVP_aes_128_cbc(), NULL, key.aes_key, iv );
+             if (!is_current_key) {
+                 // The ticket matched a key in the list, and we want to upgrade it to the current
+                 // key.
+                 apr_atomic_inc32(&c->ticket_keys_renew);
+                 return 2;
+             }
+             // The ticket matched the current key.
+             apr_atomic_inc32(&c->ticket_keys_resume);
+             return 1;
+         }
+         // No matching ticket.
+         apr_atomic_inc32(&c->ticket_keys_fail);
+         return 0;
+     }
 }
 
 TCN_IMPLEMENT_CALL(void, SSLContext, setSessionTicketKeys0)(TCN_STDARGS, jlong ctx, jbyteArray keys)
@@ -1426,92 +1453,6 @@ TCN_IMPLEMENT_CALL(void, SSLContext, setSessionTicketKeys0)(TCN_STDARGS, jlong c
     SSL_CTX_set_tlsext_ticket_key_cb(c->ctx, ssl_tlsext_ticket_key_cb);
 }
 
-
-/*
- * Adapted from OpenSSL:
- * http://osxr.org/openssl/source/ssl/ssl_locl.h#0291
- */
-/* Bits for algorithm_mkey (key exchange algorithm) */
-#define SSL_kRSA        0x00000001L /* RSA key exchange */
-#define SSL_kDHr        0x00000002L /* DH cert, RSA CA cert */ /* no such ciphersuites supported! */
-#define SSL_kDHd        0x00000004L /* DH cert, DSA CA cert */ /* no such ciphersuite supported! */
-#define SSL_kEDH        0x00000008L /* tmp DH key no DH cert */
-#define SSL_kKRB5       0x00000010L /* Kerberos5 key exchange */
-#define SSL_kECDHr      0x00000020L /* ECDH cert, RSA CA cert */
-#define SSL_kECDHe      0x00000040L /* ECDH cert, ECDSA CA cert */
-#define SSL_kEECDH      0x00000080L /* ephemeral ECDH */
-#define SSL_kPSK        0x00000100L /* PSK */
-#define SSL_kGOST       0x00000200L /* GOST key exchange */
-#define SSL_kSRP        0x00000400L /* SRP */
-
-/* Bits for algorithm_auth (server authentication) */
-#define SSL_aRSA        0x00000001L /* RSA auth */
-#define SSL_aDSS        0x00000002L /* DSS auth */
-#define SSL_aNULL       0x00000004L /* no auth (i.e. use ADH or AECDH) */
-#define SSL_aDH         0x00000008L /* Fixed DH auth (kDHd or kDHr) */ /* no such ciphersuites supported! */
-#define SSL_aECDH       0x00000010L /* Fixed ECDH auth (kECDHe or kECDHr) */
-#define SSL_aKRB5       0x00000020L /* KRB5 auth */
-#define SSL_aECDSA      0x00000040L /* ECDSA auth*/
-#define SSL_aPSK        0x00000080L /* PSK auth */
-#define SSL_aGOST94     0x00000100L /* GOST R 34.10-94 signature auth */
-#define SSL_aGOST01     0x00000200L /* GOST R 34.10-2001 signature auth */
-
-/* OpenSSL end */
-
-/*
- * Adapted from Android:
- * https://android.googlesource.com/platform/external/openssl/+/master/patches/0003-jsse.patch
- */
-const char* cipher_authentication_method(const SSL_CIPHER* cipher){
-#ifndef OPENSSL_IS_BORINGSSL
-    switch (cipher->algorithm_mkey)
-        {
-    case SSL_kRSA:
-        return SSL_TXT_RSA;
-    case SSL_kDHr:
-        return SSL_TXT_DH "_" SSL_TXT_RSA;
-
-    case SSL_kDHd:
-        return SSL_TXT_DH "_" SSL_TXT_DSS;
-    case SSL_kEDH:
-        switch (cipher->algorithm_auth)
-            {
-        case SSL_aDSS:
-            return "DHE_" SSL_TXT_DSS;
-        case SSL_aRSA:
-            return "DHE_" SSL_TXT_RSA;
-        case SSL_aNULL:
-            return SSL_TXT_DH "_anon";
-        default:
-            return UNKNOWN_AUTH_METHOD;
-            }
-    case SSL_kKRB5:
-        return SSL_TXT_KRB5;
-    case SSL_kECDHr:
-        return SSL_TXT_ECDH "_" SSL_TXT_RSA;
-    case SSL_kECDHe:
-        return SSL_TXT_ECDH "_" SSL_TXT_ECDSA;
-    case SSL_kEECDH:
-        switch (cipher->algorithm_auth)
-            {
-        case SSL_aECDSA:
-            return "ECDHE_" SSL_TXT_ECDSA;
-        case SSL_aRSA:
-            return "ECDHE_" SSL_TXT_RSA;
-        case SSL_aNULL:
-            return SSL_TXT_ECDH "_anon";
-        default:
-            return UNKNOWN_AUTH_METHOD;
-            }
-    default:
-        return UNKNOWN_AUTH_METHOD;
-    }
-#else
-    return SSL_CIPHER_get_kx_name(cipher);
-#endif
-
-}
-
 static const char* authentication_method(const SSL* ssl) {
 {
     const STACK_OF(SSL_CIPHER) *ciphers = NULL;
@@ -1526,7 +1467,7 @@ static const char* authentication_method(const SSL* ssl) {
                 // No cipher available so return UNKNOWN.
                 return UNKNOWN_AUTH_METHOD;
             }
-            return cipher_authentication_method(sk_value((_STACK*) ciphers, 0));
+            return SSL_cipher_authentication_method(sk_value((_STACK*) ciphers, 0));
         }
     }
 }
@@ -1565,8 +1506,10 @@ static int SSL_cert_verify(X509_STORE_CTX *ctx, void *arg) {
         if (length < 0) {
             // In case of error just return an empty byte[][]
             array = (*e)->NewObjectArray(e, 0, byteArrayClass, NULL);
-            // We need to delete the local references so we not leak memory as this method is called via callback.
-            OPENSSL_free(buf);
+            if (buf != NULL) {
+                // We need to delete the local references so we not leak memory as this method is called via callback.
+                OPENSSL_free(buf);
+            }
             break;
         }
         bArray = (*e)->NewByteArray(e, length);
@@ -1595,7 +1538,6 @@ static int SSL_cert_verify(X509_STORE_CTX *ctx, void *arg) {
     return result == X509_V_OK ? 1 : 0;
 }
 
-
 TCN_IMPLEMENT_CALL(void, SSLContext, setCertVerifyCallback)(TCN_STDARGS, jlong ctx, jobject verifier)
 {
     tcn_ssl_ctxt_t *c = J2P(ctx, tcn_ssl_ctxt_t *);
@@ -1620,6 +1562,153 @@ TCN_IMPLEMENT_CALL(void, SSLContext, setCertVerifyCallback)(TCN_STDARGS, jlong c
         c->verifier_method = method;
 
         SSL_CTX_set_cert_verify_callback(c->ctx, SSL_cert_verify, NULL);
+    }
+}
+
+/**
+ * Returns an array containing all the X500 principal's bytes.
+ *
+ * Partly based on code from conscrypt:
+ * https://android.googlesource.com/platform/external/conscrypt/+/master/src/main/native/org_conscrypt_NativeCrypto.cpp
+ */
+static jobjectArray principalBytes(JNIEnv* e, const STACK_OF(X509_NAME)* names) {
+    jobjectArray array;
+    jbyteArray bArray;
+    int i;
+    int count;
+    int length;
+    unsigned char *buf;
+    X509_NAME* principal;
+
+    if (names == NULL) {
+        return NULL;
+    }
+
+    count = sk_X509_NAME_num(names);
+    if (count <= 0) {
+        return NULL;
+    }
+
+    array = (*e)->NewObjectArray(e, count, byteArrayClass, NULL);
+    if (array == NULL) {
+        return NULL;
+    }
+
+    for (i = 0; i < count; i++) {
+        principal = sk_X509_NAME_value(names, i);
+        buf = NULL;
+        length = i2d_X509_NAME(principal, &buf);
+        if (length < 0) {
+            if (buf != NULL) {
+                // We need to delete the local references so we not leak memory as this method is called via callback.
+                OPENSSL_free(buf);
+            }
+            // In case of error just return an empty byte[][]
+            return (*e)->NewObjectArray(e, 0, byteArrayClass, NULL);
+        }
+        bArray = (*e)->NewByteArray(e, length);
+        (*e)->SetByteArrayRegion(e, bArray, 0, length, (jbyte*) buf);
+        (*e)->SetObjectArrayElement(e, array, i, bArray);
+
+        // Delete the local reference as we not know how long the chain is and local references are otherwise
+        // only freed once jni method returns.
+        (*e)->DeleteLocalRef(e, bArray);
+        OPENSSL_free(buf);
+    }
+
+    return array;
+}
+
+/**
+ * Partly based on code from conscrypt:
+ * https://android.googlesource.com/platform/external/conscrypt/+/master/src/main/native/org_conscrypt_NativeCrypto.cpp
+ */
+static int cert_requested(SSL* ssl, X509** x509Out, EVP_PKEY** pkeyOut) {
+    tcn_ssl_ctxt_t *c = SSL_get_app_data2(ssl);
+    char ssl2_ctype = SSL3_CT_RSA_SIGN;
+    int ctype_num;
+    jbyte* ctype_bytes;
+    jobjectArray issuers;
+    JNIEnv *e;
+    jbyteArray keyTypes;
+    X509* certificate;
+    EVP_PKEY* privatekey;
+    tcn_get_java_env(&e);
+
+    /* Clear output of key and certificate in case of early exit due to error. */
+    *x509Out = NULL;
+    *pkeyOut = NULL;
+
+#if !defined(OPENSSL_IS_BORINGSSL) && (OPENSSL_VERSION_NUMBER < 0x1000200fL || LIBRESSL_VERSION_NUMBER < 0x20400000L)
+    switch (ssl->version) {
+        case SSL2_VERSION:
+            ctype_bytes = (jbyte*) &ssl2_ctype;
+            ctype_num = 1;
+            break;
+        case SSL3_VERSION:
+        case TLS1_VERSION:
+        case TLS1_1_VERSION:
+        case TLS1_2_VERSION:
+        case DTLS1_VERSION:
+            ctype_bytes = (jbyte*) ssl->s3->tmp.ctype;
+            ctype_num = ssl->s3->tmp.ctype_num;
+            break;
+    }
+#else
+    ctype_num = SSL_get0_certificate_types(ssl, (const uint8_t **) &ctype_bytes);
+#endif
+    if (ctype_num <= 0) {
+        // Use no certificate
+        return 0;
+    }
+    keyTypes = (*e)->NewByteArray(e, ctype_num);
+    if (keyTypes == NULL) {
+        // Something went seriously wrong, bail out!
+        return -1;
+    }
+    (*e)->SetByteArrayRegion(e, keyTypes, 0, ctype_num, ctype_bytes);
+
+    issuers = principalBytes(e,  SSL_get_client_CA_list(ssl));
+
+    // Execute the java callback
+    (*e)->CallVoidMethod(e, c->cert_requested_callback, c->cert_requested_callback_method, P2J(ssl), keyTypes, issuers);
+
+    // Check for values set from Java
+    certificate = SSL_get_certificate(ssl);
+    privatekey  = SSL_get_privatekey(ssl);
+
+    if (certificate != NULL && privatekey != NULL) {
+        *x509Out = certificate;
+        *pkeyOut = privatekey;
+        return 1;
+    }
+    // TODO: Would it be more correct to return 0 in this case we may not want to use any cert / private key ?
+    return -1;
+}
+
+TCN_IMPLEMENT_CALL(void, SSLContext, setCertRequestedCallback)(TCN_STDARGS, jlong ctx, jobject callback)
+{
+    tcn_ssl_ctxt_t *c = J2P(ctx, tcn_ssl_ctxt_t *);
+
+    UNREFERENCED(o);
+    TCN_ASSERT(ctx != 0);
+
+    if (callback == NULL) {
+        SSL_CTX_set_client_cert_cb(c->ctx, NULL);
+    } else {
+        jclass callback_class = (*e)->GetObjectClass(e, callback);
+        jmethodID method = (*e)->GetMethodID(e, callback_class, "requested", "(J[B[[B)V");
+        if (method == NULL) {
+            return;
+        }
+        // Delete the reference to the previous specified verifier if needed.
+        if (c->cert_requested_callback != NULL) {
+            (*e)->DeleteLocalRef(e, c->cert_requested_callback);
+        }
+        c->cert_requested_callback = (*e)->NewGlobalRef(e, callback);
+        c->cert_requested_callback_method = method;
+
+        SSL_CTX_set_client_cert_cb(c->ctx, cert_requested);
     }
 }
 
@@ -1980,6 +2069,34 @@ TCN_IMPLEMENT_CALL(jlong, SSLContext, sessionCacheFull)(TCN_STDARGS, jlong ctx)
 }
 
 TCN_IMPLEMENT_CALL(jlong, SSLContext, sessionMisses)(TCN_STDARGS, jlong ctx)
+{
+    UNREFERENCED_STDARGS;
+    UNREFERENCED(ctx);
+    return 0;
+}
+
+TCN_IMPLEMENT_CALL(jlong, SSLContext, sessionTicketKeyNew)(TCN_STDARGS, jlong ctx)
+{
+    UNREFERENCED_STDARGS;
+    UNREFERENCED(ctx);
+    return 0;
+}
+
+TCN_IMPLEMENT_CALL(jlong, SSLContext, sessionTicketKeyResume)(TCN_STDARGS, jlong ctx)
+{
+    UNREFERENCED_STDARGS;
+    UNREFERENCED(ctx);
+    return 0;
+}
+
+TCN_IMPLEMENT_CALL(jlong, SSLContext, sessionTicketKeyRenew)(TCN_STDARGS, jlong ctx)
+{
+    UNREFERENCED_STDARGS;
+    UNREFERENCED(ctx);
+    return 0;
+}
+
+TCN_IMPLEMENT_CALL(jlong, SSLContext, sessionTicketKeyFail)(TCN_STDARGS, jlong ctx)
 {
     UNREFERENCED_STDARGS;
     UNREFERENCED(ctx);

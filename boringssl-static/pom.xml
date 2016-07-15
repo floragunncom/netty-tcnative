@@ -19,7 +19,7 @@
   <parent>
     <groupId>io.netty</groupId>
     <artifactId>netty-tcnative-parent</artifactId>
-    <version>1.1.33.Fork17-SNAPSHOT</version>
+    <version>1.1.33.Fork19</version>
   </parent>
   <artifactId>netty-tcnative-boringssl-static</artifactId>
   <packaging>jar</packaging>
@@ -132,14 +132,35 @@
                 </goals>
                 <configuration>
                   <target>
+                    <!-- Add the ant tasks from ant-contrib -->
+                    <taskdef resource="net/sf/antcontrib/antcontrib.properties" />
+
                     <mkdir dir="${boringsslBuildDir}" />
-                    <exec executable="cmake" failonerror="true" dir="${boringsslBuildDir}" resolveexecutable="true">
-                      <arg value="-DCMAKE_POSITION_INDEPENDENT_CODE=TRUE" />
-                      <arg value="-DCMAKE_BUILD_TYPE=Release" />
-                      <arg value="-DCMAKE_ASM_FLAGS=-Wa,--noexecstack" />
-                      <arg value="-GNinja" />
-                      <arg value=".." />
-                    </exec>
+
+                    <if>
+                      <equals arg1="${os.detected.name}" arg2="windows" />
+                      <then>
+                        <!-- On Windows, build with /MT for static linking -->
+                        <exec executable="cmake" failonerror="true" dir="${boringsslBuildDir}" resolveexecutable="true">
+                          <arg value="-DCMAKE_POSITION_INDEPENDENT_CODE=TRUE" />
+                          <arg value="-DCMAKE_BUILD_TYPE=Release" />
+                          <arg value="-DCMAKE_C_FLAGS_RELEASE=/MT" />
+                          <arg value="-DCMAKE_CXX_FLAGS_RELEASE=/MT" />
+                          <arg value="-GNinja" />
+                          <arg value=".." />
+                        </exec>
+                      </then>
+                      <else>
+                        <!-- On *nix, add ASM flags to disable executable stack -->
+                        <exec executable="cmake" failonerror="true" dir="${boringsslBuildDir}" resolveexecutable="true">
+                          <arg value="-DCMAKE_POSITION_INDEPENDENT_CODE=TRUE" />
+                          <arg value="-DCMAKE_BUILD_TYPE=Release" />
+                          <arg value="-DCMAKE_ASM_FLAGS=-Wa,--noexecstack" />
+                          <arg value="-GNinja" />
+                          <arg value=".." />
+                        </exec>
+                      </else>
+                    </if>
                     <exec executable="ninja" failonerror="true" dir="${boringsslBuildDir}" resolveexecutable="true" />
                   </target>
                 </configuration>
@@ -154,6 +175,19 @@
                 </goals>
                 <configuration>
                   <target>
+                    <!-- Add the ant tasks from ant-contrib -->
+                    <taskdef resource="net/sf/antcontrib/antcontrib.properties" />
+
+                    <!-- Strip on linux. See https://github.com/netty/netty-tcnative/issues/129 -->
+                    <if>
+                      <equals arg1="${os.detected.name}" arg2="linux" />
+                      <then>
+                        <exec executable="strip" failonerror="true" dir="${nativeLibOnlyDir}/META-INF/native/linux${archBits}/" resolveexecutable="true">
+                          <arg value="libnetty-tcnative.so" />
+                        </exec>
+                      </then>
+                    </if>
+
                     <copy todir="${nativeJarWorkdir}">
                       <zipfileset src="${defaultJarFile}" />
                     </copy>
@@ -188,6 +222,7 @@
                   <forceAutogen>${forceAutogen}</forceAutogen>
                   <forceConfigure>${forceConfigure}</forceConfigure>
                   <windowsBuildTool>msbuild</windowsBuildTool>
+                  <!-- <verbose>true</verbose> -->
                   <configureArgs>
                     <configureArg>--with-ssl=no</configureArg>
                     <configureArg>--with-apr=${aprHome}</configureArg>
@@ -338,6 +373,11 @@
                   </supportedProjectTypes>
                   <instructions>
                     <Export-Package>org.apache.tomcat.jni.*</Export-Package>
+                    <Bundle-NativeCode>
+                      META-INF/native/libnetty-tcnative-osx-x86_64.jnilib;osname=macos;osname=macosx;processor=x86_64,
+                      META-INF/native/libnetty-tcnative-linux-x86_64.so;osname=linux;processor=x86_64,
+                      META-INF/native/netty-tcnative-windows-x86_64.dll;osname=win32;processor=x86_64
+                    </Bundle-NativeCode>
                   </instructions>
                 </configuration>
               </execution>
