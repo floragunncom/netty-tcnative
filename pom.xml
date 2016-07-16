@@ -21,7 +21,8 @@
     <artifactId>netty-parent</artifactId>
     <version>4.0.18.Final</version>
   </parent>
-  <artifactId>netty-tcnative-parent</artifactId>
+  <groupId>com.floragunn</groupId>
+  <artifactId>netty-tcnative-parent-sg</artifactId>
   <version>1.1.33.Fork19</version>
   <packaging>pom</packaging>
 
@@ -30,11 +31,22 @@
   <description>
     A Mavenized fork of Tomcat Native which incorporates various patches
   </description>
+  
+  <distributionManagement>
+    <snapshotRepository>
+      <id>ossrh-fg</id>
+      <url>https://oss.sonatype.org/content/repositories/snapshots</url>
+    </snapshotRepository>
+    <repository>
+      <id>ossrh-fg</id>
+      <url>https://oss.sonatype.org/service/local/staging/deploy/maven2/</url>
+    </repository>
+  </distributionManagement>
 
   <scm>
-    <url>https://github.com/netty/netty-tcnative</url>
-    <connection>scm:git:git://github.com/netty/netty-tcnative.git</connection>
-    <developerConnection>scm:git:ssh://git@github.com/netty/netty-tcnative.git</developerConnection>
+    <url>https://github.com/floragunncom/netty-tcnative</url>
+    <connection>scm:git:git://github.com/floragunncom/netty-tcnative.git</connection>
+    <developerConnection>scm:git:ssh://git@github.com/floragunncom/netty-tcnative.git</developerConnection>
     <tag>netty-tcnative-1.1.33.Fork19</tag>
   </scm>
 
@@ -138,11 +150,61 @@
               <version>1.0b3</version>
             </dependency>
           </dependencies>
-        </plugin>
+        </plugin> 
       </plugins>
     </pluginManagement>
 
     <plugins>
+      <plugin>
+        <artifactId>maven-checkstyle-plugin</artifactId>
+        <version>2.10</version>
+        <executions>
+         <execution>
+          <id>check-style</id>
+          <phase>none</phase>
+         </execution>
+        </executions>
+      </plugin>
+      
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-javadoc-plugin</artifactId>
+        <version>2.9.1</version>
+        <executions>
+          <execution>
+            <id>attach-javadocs</id>
+            <goals>
+              <goal>jar</goal>
+            </goals>
+          </execution>
+        </executions>
+        <configuration>
+            <encoding>${project.build.sourceEncoding}</encoding>
+            <locale>en</locale>
+            <linksource>true</linksource>
+            <validateLinks>true</validateLinks>
+            <bottom>${project.name}</bottom>
+            <additionalparam>-Xdoclint:none</additionalparam>
+        </configuration>
+      </plugin>
+    
+
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-gpg-plugin</artifactId>
+        <version>1.6</version>
+        <executions>
+          <execution>
+            <id>sign-artifacts</id>
+            <phase>verify</phase>
+            <goals>
+              <goal>sign</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+
+    
       <!-- Recent tcnative requires JDK 1.7 to build -->
       <plugin>
         <artifactId>maven-compiler-plugin</artifactId>
@@ -471,12 +533,12 @@
         </property>
       </activation>
       <modules>
-        <!--<module>openssl-dynamic</module>-->
-        <module>openssl-static</module>
-        <!--<module>boringssl-static</module>-->
+        <!-- <module>openssl-dynamic</module>  -->
+        <module>openssl-static</module> 
+        <!-- <module>boringssl-static</module> -->
 
-        <!-- Re-enable this once we get LibreSSL buiding on windows -->
-        <!-- <module>libressl-static</module> -->
+        <!-- Re-enable this once we get LibreSSL buiding on windows 
+        <module>libressl-static</module> -->
       </modules>
     </profile>
 

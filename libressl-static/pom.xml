@@ -17,11 +17,11 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
   <modelVersion>4.0.0</modelVersion>
   <parent>
-    <groupId>io.netty</groupId>
-    <artifactId>netty-tcnative-parent</artifactId>
-    <version>1.1.33.Fork19-SNAPSHOT</version>
+    <groupId>com.floragunn</groupId>
+    <artifactId>netty-tcnative-parent-sg</artifactId>
+    <version>1.1.33.Fork19</version>
   </parent>
-  <artifactId>netty-tcnative-libressl-static</artifactId>
+  <artifactId>netty-tcnative-libressl-static-sg</artifactId>
   <packaging>jar</packaging>
 
   <name>Netty/TomcatNative [LibreSSL - Static]</name>
@@ -36,7 +36,7 @@
     <libresslArchive>libressl-${libresslVersion}.tar.gz</libresslArchive>
     <linkStatic>true</linkStatic>
     <!-- Don't deploy this artifact to Maven Central -->
-    <maven.deploy.skip>true</maven.deploy.skip>
+    <maven.deploy.skip>false</maven.deploy.skip>
   </properties>
 
   <build>

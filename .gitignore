@@ -27,3 +27,9 @@
 # Mac-specific directory that no other operating system needs.
 .DS_Store
 
+/private_setting*
+/.vagrant
+/boringssl-static/src
+/libressl-static/src
+/openssl-static/src
+/.gnupg
