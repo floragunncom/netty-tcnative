@@ -5,7 +5,7 @@ machine:
 test:
   override:
     - git checkout tags/netty-tcnative-parent-1.1.33.Fork23
-    - sed -i -e 's#<packaging>pom</packaging>#<groupId>com.floragunn</groupId><packaging>pom</packaging>#g' pom.xml
+    #- sed -i -e 's#<packaging>pom</packaging>#<groupId>com.floragunn</groupId><packaging>pom</packaging>#g' pom.xml
     - sed -i -e 's#<module>openssl-dynamic</module>#<!--<module>openssl-dynamic</module>-->#g' pom.xml
     - sed -i -e 's#<module>boringssl-static</module>#<!--<module>boringssl-static</module>-->#g' pom.xml
     - sed -i -e 's#<module>libressl-static</module>#<!--<module>libressl-static</module>-->#g' pom.xml
