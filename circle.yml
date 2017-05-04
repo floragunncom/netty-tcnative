@@ -1,0 +1,18 @@
+machine:
+  java:
+    version: oraclejdk8
+
+test:
+  override:
+    - sudo apt-get -y update && sudo apt-get -y install build-essential
+    - git checkout tags/netty-tcnative-parent-2.0.0.Final
+    #- sed -i -e 's#<packaging>pom</packaging>#<groupId>com.floragunn</groupId><packaging>pom</packaging>#g' pom.xml
+    #- sed -i -e 's#<module>openssl-static</module>#<!--<module>openssl-static</module>-->#g' pom.xml
+    #- sed -i -e 's#<module>openssl-dynamic</module>#<!--<module>openssl-dynamic</module>-->#g' pom.xml
+    - sed -i -e 's#<module>boringssl-static</module>#<!--<module>boringssl-static</module>-->#g' pom.xml
+    - sed -i -e 's#<module>libressl-static</module>#<!--<module>libressl-static</module>-->#g' pom.xml
+    - mvn install
+  post:
+    - cp -R /home/ubuntu/netty-tcnative/openssl-static $CIRCLE_ARTIFACTS
+    - cp -R /home/ubuntu/netty-tcnative/openssl-dynamic $CIRCLE_ARTIFACTS
+
