@@ -5,7 +5,10 @@ machine:
 test:
   override:
     - sudo apt-get -y update && sudo apt-get -y install build-essential curl
-    - sudo apt-get purge openssl libssl-dev
+    - sudo apt-get remove libssl-dev
+    - sudo apt-get remove openssl || true
+    - sudo apt-get remove --auto-remove openssl || true
+    - sudo apt-get --force-yes remove --auto-remove openssl || true
     - curl https://www.openssl.org/source/openssl-1.0.2k.tar.gz | tar xz && cd openssl-1.0.2k && sudo ./config && sudo make && sudo make install
     #- sudo ln -sf /usr/local/ssl/bin/openssl ‘which openssl’
     
