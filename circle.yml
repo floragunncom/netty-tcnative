@@ -4,7 +4,11 @@ machine:
 
 test:
   override:
-    - sudo apt-get -y update && sudo apt-get -y install build-essential
+    - sudo apt-get -y update && sudo apt-get -y install build-essential curl
+    - sudo apt-get purge --auto-remove openssl
+    - curl https://www.openssl.org/source/openssl-1.0.2k.tar.gz | tar xz && cd openssl-1.0.2k && sudo ./config && sudo make && sudo make install
+    #- sudo ln -sf /usr/local/ssl/bin/openssl ‘which openssl’
+    
     #- git checkout tags/netty-tcnative-parent-2.0.0.Final
     #- sed -i -e 's#<packaging>pom</packaging>#<groupId>com.floragunn</groupId><packaging>pom</packaging>#g' pom.xml
     #- sed -i -e 's#<module>openssl-static</module>#<!--<module>openssl-static</module>-->#g' pom.xml
